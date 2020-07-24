@@ -112,7 +112,7 @@ class Connection {
         # Checking, if we are allowed to receive any further data
 
         if ($this->getRemainingReadCapacity() <= 0)
-            throw new \Error("Attempted reading into a full buffer!");
+            throw new \IOException("Attempted reading into a full buffer!");
 
         # Receiving data
 
@@ -142,12 +142,13 @@ class Connection {
      */
     public function write(): bool {
         if (!$this->hasBufferedOutput())
-            throw new \Error("Attempted writting an empty buffer!");
+            throw new \IOException("Attempted writting an empty buffer!");
 
         $nBytes = socket_send(
             $this->fdSocket,
             $this->bufOut,
-            strlen($this->bufOut));
+            strlen($this->bufOut),
+            0);
 
         if ($nBytes === FALSE || $nBytes === 0) {
             return FALSE;

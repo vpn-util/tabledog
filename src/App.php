@@ -3,6 +3,7 @@
 namespace TableDog;
 
 use \TableDog\Server\Connection;
+use \TableDog\Server\IOException;
 use \TableDog\Server\Server;
 
 # The autoload script registers an autoloader that automatically includes the
@@ -11,18 +12,47 @@ use \TableDog\Server\Server;
 require_once(__DIR__."/../vendor/autoload.php");
 
 class App {
-    public static function main(array $args): int {
-        $server = new Server("localhost", 8080, 24, 50000);
+    private static $RUNNING;
 
-        $server->runLoop(function ($cnts) {
-            foreach ($cnts as $cnt) {
-                echo("Read: ".($cnt->getBufferedInput())."\n");
+    public static function main(array $args): int {
+        App::$RUNNING = TRUE;
+
+        # Setting up the SIGINT handler. (SIGINT will terminate the
+        # application.)
+        #
+        # NOTE: The pcntl extension is only available on unixoid systems.
+
+        if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
+            \pcntl_signal(SIGINT, function (int $signo) {
+                App::$RUNNING = FALSE;
+            }, FALSE);
+        } else {
+            sapi_windows_set_ctrl_handler(function (int $event) {
+                if ($event !== PHP_WINDOWS_EVENT_CTRL_C) {
+                    return;
+                }
+
+                App::$RUNNING = FALSE;
+            });
+        }
+
+        # Launching the server
+
+        $server = new Server(50000);
+        $server->bind("localhost", 8080, 24);
+
+        $dirty = FALSE;
+
+        while (App::$RUNNING) {
+            $connections = $server->proceed($dirty);
+
+            foreach ($connections as $cnt) {
+                $cnt->setBufferedOutput($cnt->getBufferedInput());
                 $cnt->setBufferedInput("");
             }
+        }
 
-            return TRUE;
-        });
-
+        $server->cleanup();
         return 0;
     }
 }
