@@ -15,6 +15,9 @@ class App {
     private static $RUNNING;
 
     public static function main(array $args): int {
+        $host = "localhost";
+        $port = 8080;
+
         App::$RUNNING = TRUE;
 
         # Setting up the SIGINT handler. (SIGINT will terminate the
@@ -26,20 +29,12 @@ class App {
             \pcntl_signal(SIGINT, function (int $signo) {
                 App::$RUNNING = FALSE;
             }, FALSE);
-        } else {
-            sapi_windows_set_ctrl_handler(function (int $event) {
-                if ($event !== PHP_WINDOWS_EVENT_CTRL_C) {
-                    return;
-                }
-
-                App::$RUNNING = FALSE;
-            });
         }
 
         # Launching the server
 
         $server = new Server(50000);
-        $server->bind("localhost", 8080, 24);
+        $server->bind($host, $port, 24);
 
         $dirty = FALSE;
 

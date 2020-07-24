@@ -75,8 +75,6 @@ class Server {
             $wSeconds,
             $wMicroseconds);
 
-        echo("Select finished! $selectState, $wMicroseconds\n");
-
         if ($selectState === FALSE) {
             throw new \IOException("Select failed!");
         }
