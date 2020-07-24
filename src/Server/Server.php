@@ -50,15 +50,17 @@ class Server {
             $wReadFd = array();
             $wWriteFd = array();
 
-            # We always want to read from any socket and we want to write to
-            # the sockets of those connections that have something to write.
+            # We want to read from any socket whose input buffer has not been
+            # filled completely yet and we want to write to the sockets of
+            # those connections that have something to write.
 
             array_push($wReadFd, $this->fdServerSocket);
 
             foreach ($this->connections as $cnt) {
                 $fd = $cnt->getSocketFd();
 
-                array_push($wReadFd, $fd);
+                if ($cnt->getRemainingReadCapacity() > 0)
+                    array_push($wReadFd, $fd);
 
                 if ($cnt->hasBufferedOutput())
                     array_push($wWriteFd, $fd);
@@ -103,11 +105,25 @@ class Server {
                     continue;
                 }
 
-                $this->connections[(int) $readableFd]->read();
+                $cnt = $this->connections[(int) $readableFd];
+
+                if (!$cnt->read()) {
+                    # If reading from a connection fails, we just close it.
+
+                    $cnt->close();
+                    unset($this->connections[(int) $readableFd]);
+                }
             }
 
             foreach ($wWriteFd as $writableFd) {
-                $this->connections[(int) $writableFd]->write();
+                $cnt = $this->connections[(int) $writableFd];
+
+                if (!$cnt->write()) {
+                    # If writing to a connection fails, we just close it.
+
+                    $cnt->close();
+                    unset($this->connections[(int) $writableFd]);
+                }
             }
 
             # Calling the input handler and passing all of those Connection
@@ -128,6 +144,11 @@ class Server {
     }
 
     public function cleanup(): void {
+        foreach ($this->connections as $cnt) {
+            $cnt->close();
+        }
+
+        array_splice($this->connections, 0);
         \socket_close($this->fdServerSocket);
     }
 }
