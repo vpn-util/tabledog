@@ -1,0 +1,20 @@
+{
+    "name": "fir3/tabledog",
+    "description": "Live UniNAT table file manager.",
+    "type": "project",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Luis Felger",
+            "email": "firefligher.tornado@gmail.com"
+        }
+    ],
+    "require": {
+        "vanilla/garden-cli": "^2.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "TableDog\\": "src/"
+        }
+    }
+}
