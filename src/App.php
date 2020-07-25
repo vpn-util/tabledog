@@ -115,7 +115,7 @@ class App {
                 #       modifications first and perform them in a single
                 #       synchronized bulk operation).
 
-                $dirty = $dirty || self::handleConnection($cnt);
+                $dirty = self::handleConnection($cnt) || $dirty;
             }
         }
 
