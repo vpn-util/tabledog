@@ -109,9 +109,9 @@ DELETE-FAILED
 #### Failures
 
 ```
-{QUERY/SET/DELETE}-FAILED
+{QUERY/SET/DELETE/GENERAL}-FAILED
 E{IO/REQ/UKN}
 *A human-readable error message*
 ```
 
-TODO: Improve command documentation; describe the configuration file :D
+TODO: Improve command documentation

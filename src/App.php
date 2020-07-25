@@ -4,6 +4,9 @@ namespace TableDog;
 
 use \Garden\Cli\Cli;
 
+use \TableDog\Response\ErrorResponse;
+use \TableDog\Response\Formatter;
+use \TableDog\Response\Response;
 use \TableDog\Server\Connection;
 use \TableDog\Server\IOException;
 use \TableDog\Server\Server;
@@ -105,14 +108,60 @@ class App {
 
             $connections = $server->proceed($dirty || $windows);
 
+            # Handling the client requests
+
             foreach ($connections as $cnt) {
-                $cnt->setBufferedOutput($cnt->getBufferedInput());
-                $cnt->setBufferedInput("");
+                # TODO: This is optimizable (we may collect all table
+                #       modifications first and perform them in a single
+                #       synchronized bulk operation).
+
+                $dirty = $dirty || self::handleConnection($cnt);
             }
         }
 
         $server->cleanup();
         return 0;
+    }
+
+    private static function handleConnection(Connection $cnt): bool {
+        # If there is no CRLF (ASCII: 0x0D, 0x0A), we:
+        #  - continue reading, if the input buffer's maximum capacity has not
+        #    been reached yet.
+        #  - write an error message and clear the input buffer, if the input
+        #    buffer's maximum capacity has been reached.
+
+        $input = $cnt->getBufferedInput();
+        $idxCRLF = \strpos($input, "\r\n");
+
+        if ($idxCRLF === FALSE) {
+            if ($cnt->getRemainingReadCapacity() > 0) {
+                return TRUE;
+            }
+
+            $formatter = new Formatter();
+            $formatter->setResponse(new ErrorResponse(
+                Response::TYPE_GENERAL,
+                ErrorResponse::REASON_REQUEST,
+                "Invalid request!"));
+
+
+            $cnt->setBufferedInput("");
+            $cnt->setBufferedOutput($formatter->format());
+
+            return TRUE;
+        }
+
+        $formatter = new Formatter();
+            $formatter->setResponse(new ErrorResponse(
+                Response::TYPE_GENERAL,
+                ErrorResponse::REASON_UNKNOWN,
+                "Not Implemented."));
+
+
+        $cnt->setBufferedInput("");
+        $cnt->setBufferedOutput($formatter->format());
+
+        return TRUE;
     }
 }
 
