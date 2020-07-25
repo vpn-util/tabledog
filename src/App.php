@@ -2,6 +2,8 @@
 
 namespace TableDog;
 
+use \Garden\Cli\Cli;
+
 use \TableDog\Server\Connection;
 use \TableDog\Server\IOException;
 use \TableDog\Server\Server;
@@ -15,8 +17,45 @@ class App {
     private static $RUNNING;
 
     public static function main(array $args): int {
-        $host = "localhost";
-        $port = 8080;
+        # Parameter parsing
+
+        $cli = new Cli();
+
+        $cli->description("Launches the TableDog server.")
+            ->opt("host:h", "The host to bind to.", true)
+            ->opt("port:p", "The port to bind to.", true, "integer")
+            ->opt(
+                "backlog:b",
+                "The backlog size. (Defaults to 24)",
+                false,
+                "integer")
+            ->opt(
+                "prerouting-table:r",
+                "The path to the prerouting table file.",
+                true)
+            ->opt(
+                "postrouting-table:o",
+                "The path to the postrouting table file.",
+                true)
+            ->opt(
+                "dirty-timeout:t",
+                "The maximum timeout in milliseconds after an unsuccessful ".
+                    "flock attempt. (Defaults to 50)",
+                false,
+                "integer");
+
+        $options = $cli->parse($args);
+
+        # Copying the single options into variables
+
+        $host = $options->getOpt("host");
+        $port = $options->getOpt("port");
+        $backlog = $options->getOpt("backlog", 24);
+        $pathPreroutingTable = $options->getOpt("prerouting-table");
+        $pathPostroutingTable = $options->getOpt("postrouting-table");
+        $dirtyTimeout = $options->getOpt("dirty-timeout", 50);
+
+        # Setting up the application starts here.
 
         App::$RUNNING = TRUE;
 
@@ -44,9 +83,12 @@ class App {
         }
 
         # Launching the server
+        #
+        # NOTE: We need to multiply the dirtyTimeout by 1000 because the server
+        #       expects that the value's unit is microseconds (µs).
 
-        $server = new Server(50000);
-        $server->bind($host, $port, 24);
+        $server = new Server($dirtyTimeout * 1000);
+        $server->bind($host, $port, $backlog);
 
         $dirty = FALSE;
 
