@@ -1,6 +1,6 @@
 <?php
 
-namespace TableDog\Server;
+namespace TableDog;
 
 /**
  * Indicates that an input/output-operation failed.

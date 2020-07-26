@@ -2,6 +2,8 @@
 
 namespace TableDog\Server;
 
+use \TableDog\IOException;
+
 /**
  * The TCP/IPv4 server for the REPL.
  */
@@ -21,16 +23,15 @@ class Server {
         $this->fdServerSocket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 
         if ($this->fdServerSocket === FALSE)
-            throw new \IOException("Cannot create socket!");
+            throw new IOException("Cannot create socket!");
     }
 
     public function bind(string $addr, int $port, int $backlog): void {
         if (\socket_bind($this->fdServerSocket, $addr, $port) === FALSE)
-            throw new \IOException("Cannot bind socket to $addr:$port!");
+            throw new IOException("Cannot bind socket to $addr:$port!");
 
         if (\socket_listen($this->fdServerSocket, $backlog) === FALSE)
-            throw new \IOException(
-                "Cannot listen for incoming connections!\n");
+            throw new IOException("Cannot listen for incoming connections!\n");
     }
 
     public function proceed(bool $dirty): array {
@@ -76,7 +77,7 @@ class Server {
             $wMicroseconds);
 
         if ($selectState === FALSE) {
-            throw new \IOException("Select failed!");
+            throw new IOException("Select failed!");
         }
         
         # Handling the ready file descriptors
