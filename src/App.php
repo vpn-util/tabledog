@@ -10,13 +10,19 @@ use \TableDog\Command\Parser;
 use \TableDog\Command\ParserException;
 use \TableDog\Command\QueryCommand;
 use \TableDog\Command\SetCommand;
+use \TableDog\IOException;
 use \TableDog\Response\ErrorResponse;
 use \TableDog\Response\Formatter;
+use \TableDog\Response\OkResponse;
+use \TableDog\Response\QueryOkResponse;
 use \TableDog\Response\Response;
 use \TableDog\Server\Connection;
-use \TableDog\Server\IOException;
 use \TableDog\Server\Server;
-use \TableDog\Table\TableFile;
+use \TableDog\Table\Entry;
+use \TableDog\Table\InvalidTableException;
+use \TableDog\Table\LockException;
+use \TableDog\Table\Table;
+use \TableDog\Util\IPRange;
 
 # The autoload script registers an autoloader that automatically includes the
 # required files when we're referencing a class.
@@ -175,7 +181,7 @@ class App {
      */
     public function __construct(
         string $preroutingTablePath,
-        string $postRoutingTablePath,
+        string $postroutingTablePath,
         string $host,
         int $port,
         int $backlog,
@@ -189,6 +195,9 @@ class App {
 
         $this->running = TRUE;
         $this->alwaysDirty = FALSE;
+
+        $this->preroutingTable = new Table($preroutingTablePath);
+        $this->postroutingTable = new Table($postroutingTablePath);
 
         $this->server = new Server($dirtyTimeout);
         $this->server->bind($host, $port, $backlog);
@@ -239,31 +248,120 @@ class App {
 
         $response = NULL;
 
-        if ($cmd instanceof DeleteCommand) {
-            $response = new ErrorResponse(
-                Response::TYPE_DELETE,
-                ErrorResponse::REASON_UNKNOWN,
-                "Not implemented.");
+        try {
+            if ($cmd instanceof DeleteCommand) {
+                $response = $this->handleDelete($cmd);
+            }
+
+            if ($cmd instanceof QueryCommand) {
+                $response = $this->handleQuery($cmd);
+            }
+
+            if ($cmd instanceof SetCommand) {
+                $response = $this->handleSet($cmd);
+            }
+
+            $cnt->setBufferedInput("");
+        } catch (LockException $ex) {
+            return TRUE;
         }
 
-        if ($cmd instanceof QueryCommand) {
-            $response = new ErrorResponse(
-                Response::TYPE_QUERY,
-                ErrorResponse::REASON_UNKNOWN,
-                "Not implemented.");
-        }
-
-        if ($cmd instanceof SetCommand) {
-            $response = new ErrorResponse(
-                Response::TYPE_SET,
-                ErrorResponse::REASON_UNKNOWN,
-                "Not implemented.");
-        }
-
-        $cnt->setBufferedInput("");
         $cnt->setBufferedOutput(self::formatResponse($response));
 
         return FALSE;
+    }
+
+    private function handleDelete(DeleteCommand $delete): Response {
+        $table = $this->getTable($delete->getTable());
+        $originalAddr = $delete->getOriginalAddress();
+
+        if ($table === NULL) {
+            return new ErrorResponse(
+                Response::TYPE_SET,
+                ErrorResponse::REASON_UNKNOWN,
+                "Unknown table identifier!");
+        }
+
+        try {
+            $table->set(
+                new Entry($originalAddr, new IPRange("0.0.0.0", 0)),
+                TRUE);
+        } catch (\Exception $ex) {
+            var_dump($ex);
+
+            return new ErrorResponse(
+                Response::TYPE_DELETE,
+                ErrorResponse::REASON_IO,
+                "Internal exception.");
+        }
+
+        return new OkResponse(Response::TYPE_DELETE);
+    }
+
+    private function handleQuery(QueryCommand $query): Response {
+        $table = $this->getTable($query->getTable());
+        $originalAddr = $query->getOriginalAddress();
+
+        if ($table === NULL) {
+            return new ErrorResponse(
+                Response::TYPE_QUERY,
+                ErrorResponse::REASON_UNKNOWN,
+                "Unknown table identifier!");
+        }
+
+        $result = NULL;
+
+        try {
+            $result = $table->query($originalAddr);
+        } catch (\Exception $ex) {
+            var_dump($ex);
+
+            return new ErrorResponse(
+                Response::TYPE_QUERY,
+                ErrorResponse::REASON_IO,
+                "Internal exception.");
+        }
+
+        return new QueryOkResponse($result);
+    }
+
+    private function handleSet(SetCommand $set): Response {
+        $table = $this->getTable($set->getTable());
+        $originalAddr = $set->getOriginalAddress();
+        $replacementAddr = $set->getReplacementAddress();
+
+        if ($table === NULL) {
+            return new ErrorResponse(
+                Response::TYPE_SET,
+                ErrorResponse::REASON_UNKNOWN,
+                "Unknown table identifier!");
+        }
+
+        try {
+            $table->set(new Entry($originalAddr, $replacementAddr));
+        } catch (\Exception $ex) {
+            var_dump($ex);
+
+            return new ErrorResponse(
+                Response::TYPE_SET,
+                ErrorResponse::REASON_IO,
+                "Internal exception.");
+        }
+
+        return new OkResponse(Response::TYPE_SET);
+    }
+
+    private function getTable(int $id): ?Table {
+        switch ($id) {
+        case ICommand::TABLE_PREROUTING:
+            return $this->preroutingTable;
+
+        case ICommand::TABLE_POSTROUTING:
+            return $this->postroutingTable;
+
+        default:
+            return NULL;
+        }
     }
 
     public function run(): void {
@@ -283,11 +381,32 @@ class App {
             foreach ($connections as $cnt) {
                 $dirty = $this->handleInput($cnt) || $dirty;
             }
+
+            # Attempting to write dirty table files
+
+            if ($this->preroutingTable->isDirty()) {
+                try {
+                    $this->preroutingTable->write(FALSE);
+                } catch (LockException $ex) {
+                    $dirty = TRUE;
+                }
+            }
+
+            if ($this->postroutingTable->isDirty()) {
+                try {
+                    $this->postroutingTable->write(FALSE);
+                } catch (LockException $ex) {
+                    $dirty = TRUE;
+                }
+            }
         }
     }
 
     public function cleanup(): void {
         $this->server->cleanup();
+
+        $this->preroutingTable->cleanup();
+        $this->postroutingTable->cleanup();
     }
 
     public function isRunning(): bool {

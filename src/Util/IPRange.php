@@ -27,7 +27,7 @@ class IPRange {
     }
 
     private static function convertToMask($cidrSuffix) {
-        return 0xFFFFFFFF & (0xFFFFFFFF << $cidrSuffix);
+        return 0xFFFFFFFF & (0xFFFFFFFF << (32 - $cidrSuffix));
     }
 
     public static function parseIPv4WithCIDR(
@@ -101,12 +101,12 @@ class IPRange {
             return IPRange::RANGE_IDENTICAL;
         }
 
-        if ($this->mask > $addr->mask &&
+        if ($this->mask < $addr->mask &&
             $this->ip == ($addr->ip & $this->mask)) {
             return IPRange::RANGE_INNER;
         }
 
-        if ($this->mask < $addr->mask &&
+        if ($this->mask > $addr->mask &&
             ($this->ip & $addr->mask) == $addr->ip) {
             return IPRange::RANGE_OUTER;
         }

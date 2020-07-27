@@ -86,7 +86,7 @@ class Formatter {
                 $result .= sprintf(
                     "ENTRY %s %s\r\n",
                     $entry->getOriginalAddress(),
-                    $entry->getReplacementAddres());
+                    $entry->getReplacementAddress());
             }
             
             return $result;
