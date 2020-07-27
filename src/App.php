@@ -407,7 +407,7 @@ class App {
             # If any table file has been touched, we need to notify all UniNAT
             # processes
 
-            if ($tableUpdated && !$windows) {
+            if ($tableUpdated) {
                 exec("killall -SIGUSR1 UniNAT");
             }
         }
