@@ -34,7 +34,7 @@ class Table {
     public function __construct() {
         $this->entries = array();
         $this->dirty = FALSE;
-        $this->validated = FALSE;
+        $this->validated = TRUE;
     }
 
     private function expectValidated(): void {
@@ -96,6 +96,7 @@ class Table {
 
     public function write($fd): void {
         self::expectResource($fd);
+        $this->expectValidated();
 
         # Just dumping the entries to the file descriptor
 
