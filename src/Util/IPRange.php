@@ -31,10 +31,10 @@ class IPRange {
     }
 
     public static function parseIPv4WithCIDR(
-        string $ipAddressWithCIDR): IPRange {
+        string $ipAddressWithCIDR): ?IPRange {
         $components = explode("/", $ipAddressWithCIDR);
 
-        if (strlen($components) != 2)
+        if (count($components) != 2)
             return NULL;
 
         # Validation of the components

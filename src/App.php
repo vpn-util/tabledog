@@ -4,20 +4,33 @@ namespace TableDog;
 
 use \Garden\Cli\Cli;
 
+use \TableDog\Command\DeleteCommand;
+use \TableDog\Command\ICommand;
+use \TableDog\Command\Parser;
+use \TableDog\Command\ParserException;
+use \TableDog\Command\QueryCommand;
+use \TableDog\Command\SetCommand;
 use \TableDog\Response\ErrorResponse;
 use \TableDog\Response\Formatter;
 use \TableDog\Response\Response;
 use \TableDog\Server\Connection;
 use \TableDog\Server\IOException;
 use \TableDog\Server\Server;
+use \TableDog\Table\TableFile;
 
 # The autoload script registers an autoloader that automatically includes the
 # required files when we're referencing a class.
 
 require_once(__DIR__."/../vendor/autoload.php");
 
+/**
+ * The class that contains the main method and the main loop.
+ */
 class App {
-    private static $RUNNING;
+    /**
+     * The singleton instance of the App class.
+     */
+    private static $instance;
 
     public static function main(array $args): int {
         # Parameter parsing
@@ -60,7 +73,13 @@ class App {
 
         # Setting up the application starts here.
 
-        App::$RUNNING = TRUE;
+        self::$instance = new App(
+            $pathPreroutingTable,
+            $pathPostroutingTable,
+            $host,
+            $port,
+            $backlog,
+            $dirtyTimeout * 1000);
 
         # Setting up the SIGINT handler. (SIGINT will terminate the
         # application.)
@@ -71,97 +90,220 @@ class App {
 
         if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
             \pcntl_signal(SIGINT, function (int $signo) {
-                App::$RUNNING = FALSE;
+                global $app;
+                App::$instance->stop();
             }, FALSE);
         } else {
             sapi_windows_set_ctrl_handler(function (int $event) {
+                global $app;
+
                 if ($event !== PHP_WINDOWS_EVENT_CTRL_C) {
                     return;
                 }
 
-                App::$RUNNING = FALSE;
+                App::$instance->stop();
             });
 
             $windows = TRUE;
         }
 
-        # Launching the server
+        # If we're on Windows, we always enable the dirty flag:
         #
-        # NOTE: We need to multiply the dirtyTimeout by 1000 because the server
-        #       expects that the value's unit is microseconds (µs).
+        #  - The dirty flag sets a defined timeout for the
+        #    socket_select-operation.
+        #
+        #  - On Windows, Ctrl+C will not cause a SIGINT and the registered
+        #    Ctrl+C handler is prevented from execution until the
+        #    socket_select-operation returns.
+        #
+        #  => We need to ensure that socket_select returns periodically on
+        #     Windows, otherwise terminating the process will depend on the
+        #     return of socket_select.
 
-        $server = new Server($dirtyTimeout * 1000);
-        $server->bind($host, $port, $backlog);
-
-        $dirty = FALSE;
-
-        while (App::$RUNNING) {
-            # If we're on Windows, we always enable the dirty flag:
-            #  - The dirty flag sets a defined timeout for the
-            #    socket_select-operation.
-            #  - On Windows, Ctrl+C will not cause a SIGINT and the registered
-            #    Ctrl+C handler is prevented from execution until the
-            #    socket_select-operation returns.
-            #  => We need to ensure that socket_select returns periodically on
-            #     Windows, otherwise terminating the process will depend on the
-            #     return of socket_select.
-
-            $connections = $server->proceed($dirty || $windows);
-
-            # Handling the client requests
-
-            foreach ($connections as $cnt) {
-                # TODO: This is optimizable (we may collect all table
-                #       modifications first and perform them in a single
-                #       synchronized bulk operation).
-
-                $dirty = self::handleConnection($cnt) || $dirty;
-            }
+        if ($windows) {
+            App::$instance->setAlwaysDirty(TRUE);
         }
 
-        $server->cleanup();
+        App::$instance->run();
+        App::$instance->cleanup();
+
         return 0;
     }
 
-    private static function handleConnection(Connection $cnt): bool {
-        # If there is no CRLF (ASCII: 0x0D, 0x0A), we:
-        #  - continue reading, if the input buffer's maximum capacity has not
-        #    been reached yet.
-        #  - write an error message and clear the input buffer, if the input
-        #    buffer's maximum capacity has been reached.
+    private static function formatResponse(Response $res) {
+        $fmt = new Formatter();
+        $fmt->setResponse($res);
+        return $fmt->format();
+    }
 
-        $input = $cnt->getBufferedInput();
-        $idxCRLF = \strpos($input, "\r\n");
+    private static function parseCommand(string $cmdline) {
+        $parser = new Parser();
+        $parser->fill($cmdline);
+        return $parser->getCommand();
+    }
 
-        if ($idxCRLF === FALSE) {
+    /**
+     * The flag that indicates whether further loop iterations are necessary
+     * (true) or if the process shall terminate (false).
+     */
+    private $running;
+
+    /**
+     * The table instance that contains the PREROUTING mapping rules.
+     */
+    private $preroutingTable;
+
+    /**
+     * The table instance that contains the POSTROUTING mapping rules.
+     */
+    private $postroutingTable;
+
+    /**
+     * The server instance that receives incoming connections and manages
+     * sending/receiving messages from connected clients.
+     */
+    private $server;
+
+    /**
+     * The flag that indicates whether the socket_select operation should
+     * always be called with a timeout.
+     */
+    private $alwaysDirty;
+
+    /**
+     * Creates a new instance.
+     */
+    public function __construct(
+        string $preroutingTablePath,
+        string $postRoutingTablePath,
+        string $host,
+        int $port,
+        int $backlog,
+        int $dirtyTimeout) {
+        # Singleton-specific code
+
+        if (self::$instance !== NULL)
+            throw new \Exception("Singleton already instantiated!");
+
+        # Actual initialization of members
+
+        $this->running = TRUE;
+        $this->alwaysDirty = FALSE;
+
+        $this->server = new Server($dirtyTimeout);
+        $this->server->bind($host, $port, $backlog);
+    }
+
+    private function handleInput(Connection $cnt): bool {
+        $inBuf = $cnt->getBufferedInput();
+
+        # Since each command needs to be terminated with a CRLF sequence, we
+        # check for that.
+
+        $crlfIdx = \strpos($inBuf, "\r\n");
+
+        if ($crlfIdx === FALSE) {
+            # The command has not been terminated yet. If the input buffer
+            # limit has not been reached yet, we just continue reading bytes
+            # from the peer, otherwise we empty the input buffer and send an
+            # error response.
+
             if ($cnt->getRemainingReadCapacity() > 0) {
-                return TRUE;
+                return FALSE;
             }
 
-            $formatter = new Formatter();
-            $formatter->setResponse(new ErrorResponse(
+            $cnt->setBufferedInput("");
+            $cnt->setBufferedOutput(self::formatResponse(new ErrorResponse(
                 Response::TYPE_GENERAL,
                 ErrorResponse::REASON_REQUEST,
-                "Invalid request!"));
+                "Invalid command!")));
 
-
-            $cnt->setBufferedInput("");
-            $cnt->setBufferedOutput($formatter->format());
-
-            return TRUE;
+            return FALSE;
         }
 
-        $formatter = new Formatter();
-            $formatter->setResponse(new ErrorResponse(
-                Response::TYPE_GENERAL,
-                ErrorResponse::REASON_UNKNOWN,
-                "Not Implemented."));
+        # Parsing and handling the command
 
+        $cmd = NULL;
+
+        try {
+            $cmd = self::parseCommand(substr($inBuf, 0, $crlfIdx));
+        } catch (ParserException $ex) {
+            $cnt->setBufferedInput("");
+            $cnt->setBufferedOutput(self::formatResponse(new ErrorResponse(
+                Response::TYPE_GENERAL,
+                ErrorResponse::REASON_REQUEST,
+                "Unknown command!")));
+
+            return FALSE;
+        }
+
+        $response = NULL;
+
+        if ($cmd instanceof DeleteCommand) {
+            $response = new ErrorResponse(
+                Response::TYPE_DELETE,
+                ErrorResponse::REASON_UNKNOWN,
+                "Not implemented.");
+        }
+
+        if ($cmd instanceof QueryCommand) {
+            $response = new ErrorResponse(
+                Response::TYPE_QUERY,
+                ErrorResponse::REASON_UNKNOWN,
+                "Not implemented.");
+        }
+
+        if ($cmd instanceof SetCommand) {
+            $response = new ErrorResponse(
+                Response::TYPE_SET,
+                ErrorResponse::REASON_UNKNOWN,
+                "Not implemented.");
+        }
 
         $cnt->setBufferedInput("");
-        $cnt->setBufferedOutput($formatter->format());
+        $cnt->setBufferedOutput(self::formatResponse($response));
 
-        return TRUE;
+        return FALSE;
+    }
+
+    public function run(): void {
+        # The dirty flag indicates whether a table modification was not
+        # synchronized with the UniNAT instances because the lock for the
+        # affected file could not get acquired without blocking the execution
+        # thread.
+
+        $dirty = FALSE;
+
+        while ($this->running) {
+            $connections = $this->server->proceed(
+                $dirty || $this->alwaysDirty);
+
+            # Handling the received commands of each connection separately.
+
+            foreach ($connections as $cnt) {
+                $dirty = $this->handleInput($cnt) || $dirty;
+            }
+        }
+    }
+
+    public function cleanup(): void {
+        $this->server->cleanup();
+    }
+
+    public function isRunning(): bool {
+        return $this->running;
+    }
+
+    public function isAlwaysDirty(): bool {
+        return $this->alwaysDirty;
+    }
+
+    public function stop(): void {
+        $this->running = FALSE;
+    }
+
+    public function setAlwaysDirty(bool $alwaysDirty): void {
+        $this->alwaysDirty = $alwaysDirty;
     }
 }
 
