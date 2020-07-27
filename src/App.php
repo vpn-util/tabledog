@@ -384,9 +384,12 @@ class App {
 
             # Attempting to write dirty table files
 
+            $tableUpdated = FALSE;
+
             if ($this->preroutingTable->isDirty()) {
                 try {
                     $this->preroutingTable->write(FALSE);
+                    $tableUpdated = TRUE;
                 } catch (LockException $ex) {
                     $dirty = TRUE;
                 }
@@ -395,9 +398,17 @@ class App {
             if ($this->postroutingTable->isDirty()) {
                 try {
                     $this->postroutingTable->write(FALSE);
+                    $tableUpdated = TRUE;
                 } catch (LockException $ex) {
                     $dirty = TRUE;
                 }
+            }
+
+            # If any table file has been touched, we need to notify all UniNAT
+            # processes
+
+            if ($tableUpdated && !$windows) {
+                exec("killall -SIGUSR1 UniNAT");
             }
         }
     }
