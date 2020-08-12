@@ -27,8 +27,8 @@ perform a configuration update via a .NET or Java application.
 ## The solution
 
 For that reason, the *TableDog* server exists: It provides a standard,
-ASCII-based, TCP/IPv4 frontend, which can be used modifying the different table
-files and triggering the *UniNAT*-refresh.
+ASCII-based, TCP/IPv4 frontend, which can be used for modifying the different
+table files and triggering the *UniNAT*-refresh.
 
 The TCP-interface has been designed as
 [REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop)
@@ -49,7 +49,7 @@ QUERY {PREROUTING/POSTROUTING} <ORIGINAL-ADDRESS>
 ```
 
 This command instructs *TableDog* to respond with all table entries, whose
-*original-address*-component match the specified IPv4-range.
+*original-address*-components match the specified IPv4-range.
 
 The **first parameter** specifies which of both tables (`PREROUTING` or
 `POSTROUTING`) will be used for looking for matching table entries. The
